@@ -137,11 +137,30 @@ fn define_command(
 
     let mut dev = define_command_helper(env, uuid, auto, parent, mdev_type, jsonfile)?;
 
-    invoke_with_callout(env, &mut dev, false, "define", |dev| dev.define()).map(|_| {
-        if uuid.is_none() {
-            println!("{}", dev.uuid.to_hyphenated());
+    /*
+        Call invoke_callout_get() when defining an active device without a config file.
+        This function allows callout script to acquire device-specific attributes from sysfs,
+        and populate the attrs field correspondingly before the device is defined in the system.
+        The device config file will contain the same attributes that were used to start this device。
+    */
+    if dev.active {
+        match invoke_callout_get(env, &mut dev) {
+            Ok(_) => {
+                invoke_with_callout(env, &mut dev, false, "define", |dev| dev.define()).map(|_| {
+                    if uuid.is_none() {
+                        println!("{}", dev.uuid.to_hyphenated());
+                    }
+                })
+            }
+            Err(e) => Err(e),
         }
-    })
+    } else {
+        invoke_with_callout(env, &mut dev, false, "define", |dev| dev.define()).map(|_| {
+            if uuid.is_none() {
+                println!("{}", dev.uuid.to_hyphenated());
+            }
+        })
+    }
 }
 
 /// Implementation of the `mdevctl undefine` command
@@ -479,6 +498,10 @@ fn list_command_helper(
 
                     let _ = dev.load_definition();
 
+                    if !dev.is_defined() {
+                        let _ = invoke_callout_get(env, &mut dev);
+                    }
+
                     let devparent = dev.parent()?;
                     if !devices.contains_key(devparent) {
                         devices.insert(devparent.clone(), Vec::new());
@@ -717,6 +740,17 @@ where
 
     let _ = c.callout(dev, env, EventType::Notify, action);
     res
+}
+
+fn invoke_callout_get(env: &dyn Environment, dev: &mut MDev) -> Result<()> {
+    let mut c = Callout::new();
+
+    c.callout(dev, env, EventType::Get, "attributes")?;
+    let attrs = c.get_attrs()?;
+
+    dev.add_attributes(&attrs)?;
+
+    Ok(())
 }
 
 /// parse command line arguments and dispatch to command-specific functions

@@ -14,6 +14,7 @@ pub enum EventType {
     Pre,
     Post,
     Notify,
+    Get,
 }
 
 impl Display for EventType {
@@ -28,13 +29,16 @@ impl Display for EventType {
             EventType::Notify => {
                 write!(f, "notify")
             }
+            EventType::Get => {
+                write!(f, "get")
+            }
         }
     }
 }
 
 fn match_event_dir(event: EventType, env: &dyn Environment) -> PathBuf {
     match event {
-        EventType::Pre | EventType::Post => env.callout_script_base(),
+        EventType::Pre | EventType::Post | EventType::Get => env.callout_script_base(),
         EventType::Notify => env.callout_notification_base(),
     }
 }
@@ -45,6 +49,7 @@ pub struct Callout<'a> {
     script: Option<PathBuf>,
     output: Option<Output>,
     use_syslog: bool,
+    attrs: Option<serde_json::Value>,
 }
 
 impl<'a> Callout<'a> {
@@ -55,6 +60,7 @@ impl<'a> Callout<'a> {
             script: None,
             output: None,
             use_syslog: false,
+            attrs: None,
         }
     }
 
@@ -64,6 +70,12 @@ impl<'a> Callout<'a> {
 
     pub fn set_use_syslog(&mut self, use_syslog: bool) {
         self.use_syslog = use_syslog;
+    }
+
+    pub fn get_attrs(&self) -> Result<&serde_json::Value> {
+        self.attrs
+            .as_ref()
+            .ok_or_else(|| anyhow!("Failed to get attributes from callout"))
     }
 
     fn conf(&self, dev: &mut MDev) -> Result<&String> {
@@ -124,10 +136,12 @@ impl<'a> Callout<'a> {
 
         let mut child = cmd.spawn()?;
 
-        if let Some(mut child_stdin) = child.stdin.take() {
-            child_stdin
-                .write_all(self.conf(dev)?.as_bytes())
-                .with_context(|| "Failed to write to stdin of command")?;
+        if e != "get" {
+            if let Some(mut child_stdin) = child.stdin.take() {
+                child_stdin
+                    .write_all(self.conf(dev)?.as_bytes())
+                    .with_context(|| "Failed to write to stdin of command")?;
+            }
         }
 
         let output = child.wait_with_output()?;
@@ -233,6 +247,54 @@ impl<'a> Callout<'a> {
         Ok(())
     }
 
+    fn get(&mut self, dev: &mut MDev, dir: PathBuf, event: EventType, action: &str) -> Result<()> {
+        let mut st = String::new();
+
+        for s in dir.read_dir()? {
+            let path = s?.path();
+
+            self.output = Some(self.invoke_script(dev, &path, event, action)?);
+
+            let rc = self.output()?.status.code();
+            if rc != Some(2) {
+                self.script = Some(path);
+
+                if self.output()?.status.success() {
+                    st = String::from_utf8_lossy(&self.output()?.stdout).to_string();
+                    debug!("Get attributes successfully from callout script");
+                    break;
+                } else {
+                    self.print_output(self.script()?, true, false)?;
+
+                    return Err(anyhow!(
+                        "failed to get attributes from {:?}",
+                        self.script()?
+                    ));
+                }
+            } else {
+                debug!(
+                    "Device type {} unmatched by callout script",
+                    dev.mdev_type.as_ref().unwrap(),
+                );
+            }
+        }
+
+        if &st == "[{}]" {
+            debug!(
+                "Attribute field for {} is empty",
+                dev.uuid.to_hyphenated().to_string()
+            );
+            st = "[]".to_string();
+        }
+
+        self.attrs = Some(
+            serde_json::from_str(&st)
+                .with_context(|| anyhow!("Unable to parse attributes from JSON"))?,
+        );
+
+        Ok(())
+    }
+
     pub fn callout(
         &mut self,
         dev: &mut MDev,
@@ -253,6 +315,7 @@ impl<'a> Callout<'a> {
         match event {
             EventType::Pre | EventType::Post => self.pre_post(dev, dir, event, action),
             EventType::Notify => self.notify(dev, dir, event, action),
+            EventType::Get => self.get(dev, dir, event, action),
         }
     }
 }
