@@ -13,6 +13,7 @@ use crate::mdev::*;
 pub enum EventType {
     Pre,
     Post,
+    Notify,
 }
 
 impl Display for EventType {
@@ -24,6 +25,9 @@ impl Display for EventType {
             EventType::Post => {
                 write!(f, "post")
             }
+            EventType::Notify => {
+                write!(f, "notify")
+            }
         }
     }
 }
@@ -31,6 +35,7 @@ impl Display for EventType {
 fn match_event_dir(event: EventType, env: &dyn Environment) -> PathBuf {
     match event {
         EventType::Pre | EventType::Post => env.callout_script_base(),
+        EventType::Notify => env.callout_notification_base(),
     }
 }
 
@@ -97,10 +102,13 @@ impl<'a> Callout<'a> {
             script.as_ref().as_os_str()
         );
 
-        let mut child = Command::new(script.as_ref().as_os_str())
-            .arg("-t")
-            .arg(dev.mdev_type()?)
-            .arg("-e")
+        let mut cmd = Command::new(script.as_ref().as_os_str());
+
+        if &e != "notify" {
+            cmd.arg("-t").arg(dev.mdev_type()?);
+        }
+
+        cmd.arg("-e")
             .arg(&e)
             .arg("-a")
             .arg(action)
@@ -112,8 +120,9 @@ impl<'a> Callout<'a> {
             .arg(dev.parent()?)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+
+        let mut child = cmd.spawn()?;
 
         if let Some(mut child_stdin) = child.stdin.take() {
             child_stdin
@@ -204,6 +213,26 @@ impl<'a> Callout<'a> {
         }
     }
 
+    fn notify(
+        &mut self,
+        dev: &mut MDev,
+        dir: PathBuf,
+        event: EventType,
+        action: &str,
+    ) -> Result<()> {
+        for s in dir.read_dir()? {
+            let path = s?.path();
+
+            self.output = Some(self.invoke_script(dev, &path, event, action)?);
+            self.print_output(&path, false, false)?;
+            if !self.output()?.status.success() {
+                debug!("Error occurred when executing notify script {:?}", path);
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn callout(
         &mut self,
         dev: &mut MDev,
@@ -223,6 +252,7 @@ impl<'a> Callout<'a> {
 
         match event {
             EventType::Pre | EventType::Post => self.pre_post(dev, dir, event, action),
+            EventType::Notify => self.notify(dev, dir, event, action),
         }
     }
 }

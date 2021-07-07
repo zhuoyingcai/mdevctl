@@ -715,6 +715,7 @@ where
         Err(e) => Err(e),
     };
 
+    let _ = c.callout(dev, env, EventType::Notify, action);
     res
 }
 
