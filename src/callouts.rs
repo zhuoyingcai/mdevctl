@@ -1,5 +1,6 @@
 use crate::environment::Environment;
 use anyhow::{anyhow, Context, Result};
+use libsystemd::logging::{self, Priority};
 use log::debug;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
@@ -38,6 +39,7 @@ pub struct Callout<'a> {
     conf: Option<String>,
     script: Option<PathBuf>,
     output: Option<Output>,
+    use_syslog: bool,
 }
 
 impl<'a> Callout<'a> {
@@ -47,11 +49,16 @@ impl<'a> Callout<'a> {
             conf: None,
             script: None,
             output: None,
+            use_syslog: false,
         }
     }
 
     pub fn set_state(&mut self, state: &'a str) {
         self.state = state;
+    }
+
+    pub fn set_use_syslog(&mut self, use_syslog: bool) {
+        self.use_syslog = use_syslog;
     }
 
     fn conf(&self, dev: &mut MDev) -> Result<&String> {
@@ -129,13 +136,25 @@ impl<'a> Callout<'a> {
         if stderr {
             let st = String::from_utf8_lossy(&self.output()?.stderr);
             if !st.is_empty() {
-                eprint!("{}: {}", &sname, st);
+                let s = format!("{}: {}", &sname, st);
+
+                if !self.use_syslog {
+                    eprint!("{}", &s);
+                } else {
+                    let _ = logging::journal_print(Priority::Warning, &s);
+                }
             }
         }
         if stdout {
             let st = String::from_utf8_lossy(&self.output()?.stdout);
             if !st.is_empty() {
-                print!("{}: {}", &sname, st);
+                let s = format!("{}: {}", &sname, st);
+
+                if !self.use_syslog {
+                    print!("{}", &s);
+                } else {
+                    let _ = logging::journal_print(Priority::Notice, &s);
+                }
             }
         }
 

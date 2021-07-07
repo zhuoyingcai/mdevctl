@@ -137,7 +137,7 @@ fn define_command(
 
     let mut dev = define_command_helper(env, uuid, auto, parent, mdev_type, jsonfile)?;
 
-    invoke_with_callout(env, &mut dev, "define", |dev| dev.define()).map(|_| {
+    invoke_with_callout(env, &mut dev, false, "define", |dev| dev.define()).map(|_| {
         if uuid.is_none() {
             println!("{}", dev.uuid.to_hyphenated());
         }
@@ -153,7 +153,7 @@ fn undefine_command(env: &dyn Environment, uuid: Uuid, parent: Option<String>) -
     }
     for (_, mut children) in devs {
         for mut child in children.iter_mut() {
-            let _ = invoke_with_callout(env, &mut child, "undefine", |_dev| _dev.undefine());
+            let _ = invoke_with_callout(env, &mut child, false, "undefine", |_dev| _dev.undefine());
         }
     }
     Ok(())
@@ -196,7 +196,7 @@ fn modify_command(
         }
     }
 
-    invoke_with_callout(env, &mut dev, "modify", |dev| dev.write_config())
+    invoke_with_callout(env, &mut dev, false, "modify", |dev| dev.write_config())
 }
 
 /// convert 'start' command arguments into a MDev struct
@@ -291,7 +291,7 @@ fn start_command(
 ) -> Result<()> {
     let mut dev = start_command_helper(env, uuid, parent, mdev_type, jsonfile)?;
 
-    invoke_with_callout(env, &mut dev, "start", |dev| dev.start()).map(|_| {
+    invoke_with_callout(env, &mut dev, false, "start", |dev| dev.start()).map(|_| {
         if uuid.is_none() {
             println!("{}", dev.uuid.to_hyphenated());
         }
@@ -304,7 +304,7 @@ fn stop_command(env: &dyn Environment, uuid: Uuid) -> Result<()> {
     let mut dev = MDev::new(env, uuid);
     dev.load_from_sysfs()?;
 
-    invoke_with_callout(env, &mut dev, "stop", |dev| dev.stop())
+    invoke_with_callout(env, &mut dev, false, "stop", |dev| dev.stop())
 }
 
 /// convenience function to lookup a defined device by uuid and parent
@@ -668,7 +668,9 @@ fn start_parent_mdevs_command(env: &dyn Environment, parent: String) -> Result<(
         for child in children {
             if child.autostart {
                 debug!("Autostarting {:?}", child.uuid);
-                if let Err(e) = child.start() {
+                if let Err(e) =
+                    invoke_with_callout(env, child, true, "start", |child| child.start())
+                {
                     for x in e.chain() {
                         warn!("{}", x);
                     }
@@ -682,6 +684,7 @@ fn start_parent_mdevs_command(env: &dyn Environment, parent: String) -> Result<(
 fn invoke_with_callout<F>(
     env: &dyn Environment,
     dev: &mut MDev,
+    use_syslog: bool,
     action: &str,
     func: F,
 ) -> Result<()>
@@ -689,6 +692,10 @@ where
     F: Fn(&mut MDev) -> Result<()>,
 {
     let mut c = Callout::new();
+
+    if use_syslog {
+        c.set_use_syslog(use_syslog);
+    }
 
     let res = match c.callout(dev, env, EventType::Pre, action) {
         Ok(_) => {
