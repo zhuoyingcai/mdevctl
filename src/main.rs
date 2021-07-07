@@ -16,11 +16,13 @@ use std::vec::Vec;
 use structopt::StructOpt;
 use uuid::Uuid;
 
+use crate::callouts::*;
 use crate::cli::{LsmdevOptions, MdevctlCommands};
 use crate::environment::{DefaultEnvironment, Environment};
 use crate::logger::logger;
 use crate::mdev::*;
 
+mod callouts;
 mod cli;
 mod environment;
 mod logger;
@@ -133,8 +135,9 @@ fn define_command(
 ) -> Result<()> {
     debug!("Defining mdev {:?}", uuid);
 
-    let dev = define_command_helper(env, uuid, auto, parent, mdev_type, jsonfile)?;
-    dev.define().map(|_| {
+    let mut dev = define_command_helper(env, uuid, auto, parent, mdev_type, jsonfile)?;
+
+    invoke_with_callout(env, &mut dev, "define", |dev| dev.define()).map(|_| {
         if uuid.is_none() {
             println!("{}", dev.uuid.to_hyphenated());
         }
@@ -149,8 +152,8 @@ fn undefine_command(env: &dyn Environment, uuid: Uuid, parent: Option<String>) -
         return Err(anyhow!("No devices match the specified uuid"));
     }
     for (_, mut children) in devs {
-        for child in children.iter_mut() {
-            child.undefine()?;
+        for mut child in children.iter_mut() {
+            let _ = invoke_with_callout(env, &mut child, "undefine", |_dev| _dev.undefine());
         }
     }
     Ok(())
@@ -193,7 +196,7 @@ fn modify_command(
         }
     }
 
-    dev.write_config()
+    invoke_with_callout(env, &mut dev, "modify", |dev| dev.write_config())
 }
 
 /// convert 'start' command arguments into a MDev struct
@@ -287,7 +290,8 @@ fn start_command(
     jsonfile: Option<PathBuf>,
 ) -> Result<()> {
     let mut dev = start_command_helper(env, uuid, parent, mdev_type, jsonfile)?;
-    dev.start().map(|_| {
+
+    invoke_with_callout(env, &mut dev, "start", |dev| dev.start()).map(|_| {
         if uuid.is_none() {
             println!("{}", dev.uuid.to_hyphenated());
         }
@@ -299,7 +303,8 @@ fn stop_command(env: &dyn Environment, uuid: Uuid) -> Result<()> {
     debug!("Stopping '{}'", uuid);
     let mut dev = MDev::new(env, uuid);
     dev.load_from_sysfs()?;
-    dev.stop()
+
+    invoke_with_callout(env, &mut dev, "stop", |dev| dev.stop())
 }
 
 /// convenience function to lookup a defined device by uuid and parent
@@ -672,6 +677,38 @@ fn start_parent_mdevs_command(env: &dyn Environment, parent: String) -> Result<(
         }
     }
     Ok(())
+}
+
+fn invoke_with_callout<F>(
+    env: &dyn Environment,
+    dev: &mut MDev,
+    action: &str,
+    func: F,
+) -> Result<()>
+where
+    F: Fn(&mut MDev) -> Result<()>,
+{
+    let mut c = Callout::new();
+
+    let res = match c.callout(dev, env, EventType::Pre, action) {
+        Ok(_) => {
+            let tmp_res = func(dev);
+            match tmp_res {
+                Ok(_) => c.set_state("success"),
+                Err(_) => c.set_state("failure"),
+            }
+
+            let post_res = c.callout(dev, env, EventType::Post, action);
+            if post_res.is_err() {
+                debug!("Error occurred when executing post callout script");
+            }
+
+            tmp_res
+        }
+        Err(e) => Err(e),
+    };
+
+    res
 }
 
 /// parse command line arguments and dispatch to command-specific functions
