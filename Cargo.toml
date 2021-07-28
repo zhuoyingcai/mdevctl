@@ -20,7 +20,13 @@ structopt = "0.3.13"
 uuid = {version = "0.8.2", features = ["v4"]}
 tempfile = "3"
 syslog = "^4.0"
+strum = "0.21"
+strum_macros = "0.21"
 
 [build-dependencies]
 structopt = "0.3.13"
 uuid = "0.8.2"
+
+[lib]
+name = "scripttemplate"
+path = "lib/scripttemplate.rs"
