@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use std::ffi::OsStr;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
@@ -68,6 +68,7 @@ impl Display for State {
 pub struct Callout {
     state: State,
     script: Option<PathBuf>,
+    use_syslog: bool,
 }
 
 impl Callout {
@@ -75,14 +76,19 @@ impl Callout {
         Callout {
             state: State::None,
             script: None,
+            use_syslog: false,
         }
     }
 
-    pub fn invoke<F>(dev: &mut MDev, action: Action, func: F) -> Result<()>
+    pub fn invoke<F>(dev: &mut MDev, use_syslog: bool, action: Action, func: F) -> Result<()>
     where
         F: Fn(&mut MDev) -> Result<()>,
     {
         let mut c = Callout::new();
+
+        if use_syslog {
+            c.set_use_syslog(use_syslog);
+        }
 
         c.callout(dev, Event::Pre, action).and_then(|_| {
             let tmp_res = func(dev);
@@ -98,6 +104,10 @@ impl Callout {
 
             tmp_res
         })
+    }
+
+    pub fn set_use_syslog(&mut self, use_syslog: bool) {
+        self.use_syslog = use_syslog;
     }
 
     fn invoke_script<P: AsRef<Path>>(
@@ -153,13 +163,25 @@ impl Callout {
         if stderr {
             let st = String::from_utf8_lossy(&output.stderr);
             if !st.is_empty() {
-                eprint!("{}: {}", &sname, st);
+                let s = format!("{}: {}", &sname, st);
+
+                if !self.use_syslog {
+                    eprint!("{}", &s);
+                } else {
+                    warn!("{}", &s);
+                }
             }
         }
         if stdout {
             let st = String::from_utf8_lossy(&output.stdout);
             if !st.is_empty() {
-                print!("{}: {}", &sname, st);
+                let s = format!("{}: {}", &sname, st);
+
+                if !self.use_syslog {
+                    print!("{}", &s);
+                } else {
+                    info!("{}", &s);
+                }
             }
         }
     }

@@ -6,14 +6,17 @@
 //! See `mdevctl help` or the manpage for more information.
 
 use anyhow::{anyhow, ensure, Context, Result};
+use log::LevelFilter;
 use log::{debug, warn};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
+use std::process;
 use std::vec::Vec;
 use structopt::StructOpt;
+use syslog::{BasicLogger, Facility, Formatter3164};
 use uuid::Uuid;
 
 use crate::callouts::*;
@@ -137,7 +140,7 @@ fn define_command(
 
     let mut dev = define_command_helper(env, uuid, auto, parent, mdev_type, jsonfile)?;
 
-    Callout::invoke(&mut dev, Action::Define, |dev| dev.define()).map(|_| {
+    Callout::invoke(&mut dev, false, Action::Define, |dev| dev.define()).map(|_| {
         if uuid.is_none() {
             println!("{}", dev.uuid.to_hyphenated());
         }
@@ -153,7 +156,7 @@ fn undefine_command(env: &dyn Environment, uuid: Uuid, parent: Option<String>) -
     }
     for (_, mut children) in devs {
         for mut child in children.iter_mut() {
-            let _ = Callout::invoke(&mut child, Action::Undefine, |dev| dev.undefine());
+            let _ = Callout::invoke(&mut child, false, Action::Undefine, |dev| dev.undefine());
         }
     }
     Ok(())
@@ -196,7 +199,7 @@ fn modify_command(
         }
     }
 
-    Callout::invoke(&mut dev, Action::Modify, |dev| dev.write_config())
+    Callout::invoke(&mut dev, false, Action::Modify, |dev| dev.write_config())
 }
 
 /// convert 'start' command arguments into a MDev struct
@@ -291,7 +294,7 @@ fn start_command(
 ) -> Result<()> {
     let mut dev = start_command_helper(env, uuid, parent, mdev_type, jsonfile)?;
 
-    Callout::invoke(&mut dev, Action::Start, |dev| dev.start()).map(|_| {
+    Callout::invoke(&mut dev, false, Action::Start, |dev| dev.start()).map(|_| {
         if uuid.is_none() {
             println!("{}", dev.uuid.to_hyphenated());
         }
@@ -304,7 +307,7 @@ fn stop_command(env: &dyn Environment, uuid: Uuid) -> Result<()> {
     let mut dev = MDev::new(env, uuid);
     dev.load_from_sysfs()?;
 
-    Callout::invoke(&mut dev, Action::Stop, |dev| dev.stop())
+    Callout::invoke(&mut dev, false, Action::Stop, |dev| dev.stop())
 }
 
 /// convenience function to lookup a defined device by uuid and parent
@@ -668,7 +671,7 @@ fn start_parent_mdevs_command(env: &dyn Environment, parent: String) -> Result<(
         for child in children {
             if child.autostart {
                 debug!("Autostarting {:?}", child.uuid);
-                if let Err(e) = child.start() {
+                if let Err(e) = Callout::invoke(child, true, Action::Start, |child| child.start()) {
                     for x in e.chain() {
                         warn!("{}", x);
                     }
@@ -681,11 +684,37 @@ fn start_parent_mdevs_command(env: &dyn Environment, parent: String) -> Result<(
 
 /// parse command line arguments and dispatch to command-specific functions
 fn main() -> Result<()> {
-    logger().init();
-    debug!("Starting up");
-
     let env = DefaultEnvironment::new();
-    debug!("{:?}", env);
+
+    // we can't have more than one logger initialized at the same time. Auto-start devices
+    // need syslog, so let's check if the mdevctl command is for StartParentMdevs first
+    // and handle it. Otherwise initialize the env_logger for the other commands
+    match MdevctlCommands::from_args() {
+        MdevctlCommands::StartParentMdevs { parent } => {
+            let formatter = Formatter3164 {
+                facility: Facility::LOG_USER,
+                hostname: None,
+                process: "MDEVCTL_LOG".into(),
+                pid: process::id() as i32,
+            };
+
+            match syslog::unix(formatter) {
+                Ok(logger) => {
+                    let _ = log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
+                        .map(|()| log::set_max_level(LevelFilter::Info));
+
+                    return start_parent_mdevs_command(&env, parent);
+                }
+                _ => return start_parent_mdevs_command(&env, parent),
+            }
+        }
+        _ => {
+            logger().init();
+            debug!("Starting up");
+            debug!("{:?}", env);
+        }
+    }
+
     // check if we're running as the symlink executable 'lsmdev'. If so, just execute the 'list'
     // command directly
     let exe = std::env::args_os().next().unwrap();
@@ -740,9 +769,7 @@ fn main() -> Result<()> {
                 list.parent,
             ),
             MdevctlCommands::Types { parent, dumpjson } => types_command(&env, parent, dumpjson),
-            MdevctlCommands::StartParentMdevs { parent } => {
-                start_parent_mdevs_command(&env, parent)
-            }
+            _ => Ok(()),
         },
     }
 }
