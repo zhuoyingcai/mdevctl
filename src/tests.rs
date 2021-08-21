@@ -1405,4 +1405,45 @@ fn test_callouts() {
             test.populate_callout_script("callout_test_all_fail");
         },
     );
+    // Expected behavior: script will report that the requested device type / parent does not
+    // match the script's type / parent. mdevctl will continue with regularly scheduled programming.
+    test_invoke_callout(
+        "test_callout_wrong_type",
+        Expect::Pass,
+        Action::Test,
+        Uuid::parse_str(DEFAULT_UUID).ok(),
+        DEFAULT_PARENT,
+        DEFAULT_TYPE,
+        |test| {
+            test.populate_callout_script("callout_test_wrong_type");
+        },
+    );
+    // This test is expected to fail. If the correct script is executed, then it will`
+    // return error code 1.
+    test_invoke_callout(
+        "test_callout_type_c",
+        Expect::Fail,
+        Action::Test,
+        Uuid::parse_str(DEFAULT_UUID).ok(),
+        "parent_c",
+        "type_c",
+        |test| {
+            test.populate_callout_script("callout_test_type_a");
+            test.populate_callout_script("callout_test_type_b");
+            test.populate_callout_script("callout_test_type_c");
+        },
+    );
+    test_invoke_callout(
+        "test_callout_no_script",
+        Expect::Pass,
+        Action::Test,
+        Uuid::parse_str(DEFAULT_UUID).ok(),
+        "parent_d",
+        "type_d",
+        |test| {
+            test.populate_callout_script("callout_test_type_a");
+            test.populate_callout_script("callout_test_type_b");
+            test.populate_callout_script("callout_test_type_c");
+        },
+    );
 }
