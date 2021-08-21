@@ -1253,6 +1253,33 @@ fn test_list() {
         Some("nonexistent".to_string()),
         setup,
     );
+
+    // test list with the Get Attributes callout
+    test_list_helper(
+        "active-callout",
+        Expect::Pass,
+        false,
+        false,
+        None,
+        None,
+        |test| {
+            setup(test);
+            test.populate_callout_script("callout_test_get_good_json");
+        },
+    );
+    // if a script returns an ill-formatted JSON, then then the output should be ignored
+    // test_list_helper(
+    //     "active-callout,
+    //     Expect::Pass,
+    //     false,
+    //     false,
+    //     None,
+    //     None,
+    //     |test| {
+    //         setup(test);
+    //         test.populate_callout_script("callout_test_get_bad_json");
+    //     },
+    // );
 }
 
 fn test_types_helper(
