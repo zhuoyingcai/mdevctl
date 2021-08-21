@@ -1253,6 +1253,25 @@ fn test_list() {
         Some("nonexistent".to_string()),
         setup,
     );
+
+    // test list with the Get Attributes callout
+    test_list_helper(
+        "active-callout",
+        Expect::Pass,
+        false,
+        false,
+        None,
+        None,
+        |test| {
+            setup(test);
+            test.populate_callout_script("good-json.sh");
+        },
+    );
+    // if a script returns an ill-formatted JSON, then then the output should be ignored
+    test_list_helper("active", Expect::Pass, false, false, None, None, |test| {
+        setup(test);
+        test.populate_callout_script("bad-json.sh");
+    });
 }
 
 fn test_types_helper(
@@ -1393,7 +1412,7 @@ fn test_get_callout<F>(
     empty_mdev.mdev_type = Some(mdev_type.to_string());
     empty_mdev.parent = Some(parent.to_string());
 
-    let res = Callout::get_attributes(&mut empty_mdev);
+    let res = Callout::get_attributes_helper(&mut empty_mdev);
 
     if expect == Expect::Fail {
         res.expect_err("expected callout to fail");
